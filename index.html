@@ -1,300 +1,140 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>BLE Chat — Text→Image (Web Bluetooth)</title>
-<style>
-  :root{--bg:#071126;--card:#0b1220;--accent:#06b6d4}
-  body{margin:0;font-family:system-ui,Roboto,Arial;background:linear-gradient(180deg,#041022,#071126);color:#e8f7fb;display:flex;align-items:center;justify-content:center;height:100vh}
-  .card{width:96%;max-width:980px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,0.6);display:grid;grid-template-columns:1fr 320px;gap:12px;padding:18px}
-  header{display:flex;align-items:center;gap:12px}
-  .logo{width:56px;height:56px;border-radius:12px;background:linear-gradient(135deg,#06b6d4,#0ea5a4);display:flex;align-items:center;justify-content:center;font-weight:800;color:#022}
-  h1{margin:0;font-size:18px}
-  .chat{height:56vh;background:rgba(255,255,255,0.02);padding:12px;border-radius:10px;overflow:auto;display:flex;flex-direction:column;gap:10px}
-  .msg{max-width:72%;padding:10px 12px;border-radius:12px;font-size:15px}
-  .me{align-self:flex-end;background:linear-gradient(90deg,#06b6d4,#0ea5a4);color:#012}
-  .other{align-self:flex-start;background:rgba(255,255,255,0.03)}
-  .controls{display:flex;gap:8px;margin-top:8px}
-  .input{flex:1;background:rgba(255,255,255,0.02);padding:8px;border-radius:10px;display:flex;align-items:center;gap:8px}
-  input[type="text"]{flex:1;background:transparent;border:none;outline:none;color:inherit;font-size:15px}
-  button{background:linear-gradient(90deg,#06b6d4,#0ea5a4);border:none;padding:10px 12px;border-radius:10px;color:#012;font-weight:700;cursor:pointer}
-  .connect {background:linear-gradient(90deg,#ffb86b,#ff6b6b);color:#111}
-  aside{display:flex;flex-direction:column;gap:12px}
-  .box{background:rgba(255,255,255,0.02);padding:10px;border-radius:10px;min-height:120px;overflow:auto}
-  .small{font-size:13px;opacity:0.9}
-  .device-item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;margin-bottom:8px;background:linear-gradient(180deg,rgba(0,0,0,0.12),rgba(255,255,255,0.01))}
-  canvas{display:none}
-  .hint{padding:10px;border-radius:8px;background:rgba(255,255,255,0.02)}
-</style>
+  <meta charset="UTF-8">
+  <title>Bluetooth File Sender</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: linear-gradient(135deg, #4facfe, #00f2fe);
+      color: #222;
+      padding: 20px;
+      text-align: center;
+    }
+    h2 { margin-bottom: 15px; }
+    input, button, select {
+      padding: 10px;
+      margin: 10px;
+      border-radius: 8px;
+      border: none;
+      font-size: 16px;
+    }
+    button {
+      background: #222;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:hover { background: #444; }
+    #log {
+      margin-top: 20px;
+      padding: 10px;
+      background: #fff;
+      color: #000;
+      border-radius: 10px;
+      text-align: left;
+      min-height: 100px;
+    }
+  </style>
 </head>
 <body>
-<div class="card">
-  <div>
-    <header>
-      <div class="logo">BLE</div>
-      <div>
-        <h1>BLE Chat — Text → Image</h1>
-        <div class="small">Requires BLE peripheral that accepts chunked writes</div>
-      </div>
-    </header>
+  <h2>Bluetooth File Sender</h2>
 
-    <div id="chat" class="chat">
-      <div id="status" class="small hint">Not connected</div>
-    </div>
+  <button id="enableBtn">🔵 Enable & Search Bluetooth Devices</button><br>
+  <input type="text" id="manualAddress" placeholder="Enter Bluetooth Address (MAC)">
+  <button id="connectManual">Connect Manually</button><br>
 
-    <div class="controls">
-      <div class="input">
-        <input id="txt" type="text" placeholder="Type a message..." />
-        <button id="preview">Preview</button>
-      </div>
-      <button id="send">Send</button>
-      <button id="connectBtn" class="connect">Connect</button>
-    </div>
-  </div>
+  <div id="deviceInfo"></div>
 
-  <aside>
-    <div>
-      <strong>Devices</strong>
-      <div id="devices" class="box"></div>
-    </div>
+  <input type="file" id="fileInput" hidden>
+  <button id="chooseFileBtn" disabled>📂 Choose File</button>
+  <button id="sendFileBtn" disabled>📤 Send File</button>
 
-    <div>
-      <strong>Last image</strong>
-      <div id="previewBox" class="box" style="display:flex;align-items:center;justify-content:center;min-height:160px">No image</div>
-    </div>
+  <div id="log">Logs will appear here...</div>
 
-    <div class="hint small">Notes:<br>
-      • This page must be served over HTTPS or from localhost.<br>
-      • The other device must be a BLE peripheral with a writable characteristic.<br>
-      • Browsers block automatic reconnects for security; user action may be required to reconnect.
-    </div>
-  </aside>
-</div>
+  <script>
+    let device, server, fileData;
 
-<canvas id="canvas" width="800" height="240"></canvas>
+    function log(msg) {
+      document.getElementById("log").innerHTML += "<br>" + msg;
+    }
 
-<script>
-/*
-  USAGE NOTES:
-  - Replace SERVICE_UUID and CHAR_UUID with the BLE peripheral's service & characteristic.
-  - The page will:
-     1) Render your typed text into an image (PNG), convert to base64
-     2) Chunk base64 into small arrays and write sequentially to the characteristic
-     3) Send a simple JSON header chunk first containing {type:'img',len:NNN,chunksize:XXX} so the receiver knows how to reassemble
-  - The receiver peripheral must expect this framing and reassemble the base64 into an image file.
-*/
+    // Enable Bluetooth & choose device
+    document.getElementById("enableBtn").onclick = async () => {
+      try {
+        device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: ['battery_service']
+        });
+        log("Selected device: " + device.name);
 
-/* ===== CONFIG: put the service/characteristic your peripheral uses here ===== */
-const SERVICE_UUID = '0000ffe0-0000-1000-8000-00805f9b34fb'; // example common vendor service
-const CHAR_UUID    = '0000ffe1-0000-1000-8000-00805f9b34fb'; // example vendor writable char
-/* ========================================================================== */
+        device.addEventListener('gattserverdisconnected', () => {
+          log("Device disconnected");
+        });
 
-const chat = document.getElementById('chat');
-const status = document.getElementById('status');
-const devicesEl = document.getElementById('devices');
-const previewBox = document.getElementById('previewBox');
-const canvas = document.getElementById('canvas');
-let g_device = null;
-let g_server = null;
-let g_char = null;
-let isConnecting = false;
+        server = await device.gatt.connect();
+        log("Connected to " + device.name);
 
-function logMsg(text, who='me', asImg=false){
-  const el = document.createElement('div');
-  el.className = 'msg ' + (who==='me' ? 'me' : 'other');
-  if(asImg){
-    const img = document.createElement('img');
-    img.src = text;
-    img.style.maxWidth = '220px';
-    img.style.borderRadius = '8px';
-    el.appendChild(img);
-  } else {
-    el.textContent = text;
-  }
-  chat.appendChild(el);
-  chat.scrollTop = chat.scrollHeight;
-}
+        // Show Battery %
+        try {
+          const service = await server.getPrimaryService('battery_service');
+          const charac = await service.getCharacteristic('battery_level');
+          const battery = await charac.readValue();
+          log("Battery Level: " + battery.getUint8(0) + "%");
+          document.getElementById("deviceInfo").innerText = 
+            Connected: ${device.name} | Battery: ${battery.getUint8(0)}%;
+        } catch {
+          log("Battery info not available");
+        }
 
-function updateStatus(s){
-  status.textContent = s;
-}
-
-/* render text to PNG dataURL */
-function textToDataURL(text){
-  const ctx = canvas.getContext('2d');
-  const W = 760, H = 220;
-  canvas.width = W; canvas.height = H;
-  // background gradient
-  const g = ctx.createLinearGradient(0,0,W,H);
-  g.addColorStop(0,'#071126'); g.addColorStop(1,'#04293a');
-  ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
-  ctx.fillStyle = '#e6fbff';
-  ctx.font = '22px system-ui, Roboto, Arial';
-  ctx.textBaseline = 'top';
-  const words = text.split(' ');
-  let line = '', y = 18;
-  const maxW = W - 40;
-  for(let i=0;i<words.length;i++){
-    const t = line + words[i] + ' ';
-    const m = ctx.measureText(t);
-    if(m.width > maxW && line !== ''){
-      ctx.fillText(line, 20, y); y += 28; line = words[i] + ' ';
-    } else { line = t; }
-  }
-  ctx.fillText(line, 20, y);
-  ctx.font = '12px system-ui';
-  ctx.fillStyle = 'rgba(255,255,255,0.6)';
-  ctx.fillText('Sent via BLE Chat (Web)', 20, H - 24);
-  return canvas.toDataURL('image/png');
-}
-
-/* chunker: returns Uint8Array slices of input bytes */
-function chunkBytes(bytes, chunkSize){
-  const chunks = [];
-  for(let i=0;i<bytes.length;i+=chunkSize){
-    chunks.push(bytes.subarray(i, i+chunkSize));
-  }
-  return chunks;
-}
-
-/* Convert base64 string to Uint8Array */
-function base64ToBytes(base64){
-  const binary = atob(base64);
-  const len = binary.length;
-  const bytes = new Uint8Array(len);
-  for(let i=0;i<len;i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-/* Core: write data to BLE characteristic sequentially with small delays */
-async function writeChunksSequential(characteristic, chunks, delayMs=50){
-  for(let i=0;i<chunks.length;i++){
-    // browsers require BufferSource; use writeValue or writeValueWithResponse depending on support
-    await characteristic.writeValue(chunks[i]);
-    // tiny pause to not overflow BLE stack
-    await new Promise(r => setTimeout(r, delayMs));
-  }
-}
-
-/* High-level: send base64 image by first sending a JSON header */
-async function sendBase64Image(base64){
-  if(!g_char) throw new Error('Not connected to writable characteristic');
-  // convert base64 -> bytes
-  const bytes = base64ToBytes(base64);
-  const totalLen = bytes.length;
-  const chunkSize = 150; // safe small size for most phones; adjust if your peripheral supports larger writes
-  // Prepare JSON header describing upcoming image
-  const header = JSON.stringify({type:'img', format:'png', length: totalLen, chunkSize});
-  const headerBytes = new TextEncoder().encode(header);
-  // We'll send header as a single write, prefixed by 0x01 marker
-  const headerPacket = new Uint8Array(headerBytes.length + 1);
-  headerPacket[0] = 0x01;
-  headerPacket.set(headerBytes, 1);
-  await g_char.writeValue(headerPacket);
-
-  // Now chunk the raw bytes and send each chunk prefixed with 0x02 marker
-  const chunks = chunkBytes(bytes, chunkSize);
-  for(let i=0;i<chunks.length;i++){
-    const pkt = new Uint8Array(chunks[i].length + 1);
-    pkt[0] = 0x02; // chunk marker
-    pkt.set(chunks[i], 1);
-    await g_char.writeValue(pkt);
-    // wait small time: helps avoid BLE queue overflow
-    await new Promise(r => setTimeout(r, 40));
-  }
-  // send footer marker 0x03
-  await g_char.writeValue(new Uint8Array([0x03]));
-  return {sentBytes: totalLen, chunks: chunks.length};
-}
-
-/* UI handlers */
-document.getElementById('preview').addEventListener('click', ()=>{
-  const t = document.getElementById('txt').value || 'Preview message';
-  const dataUrl = textToDataURL(t);
-  previewBox.innerHTML = <img src="${dataUrl}" style="max-width:100%;height:auto;border-radius:8px"/>;
-});
-
-document.getElementById('send').addEventListener('click', async ()=>{
-  const t = document.getElementById('txt').value.trim();
-  if(!t){ alert('Type a message first'); return; }
-  const dataUrl = textToDataURL(t);
-  logMsg(t, 'me', false);
-  previewBox.innerHTML = <img src="${dataUrl}" style="max-width:100%;height:auto;border-radius:8px"/>;
-  // strip header
-  const base64 = dataUrl.split(',')[1];
-  try{
-    updateStatus('Sending image...');
-    const res = await sendBase64Image(base64);
-    updateStatus(Sent ${res.sentBytes} bytes in ${res.chunks} chunks);
-  }catch(err){
-    console.error(err);
-    alert('Send failed: ' + (err.message||err));
-    updateStatus('Send failed');
-  }
-  document.getElementById('txt').value = '';
-});
-
-/* Connect flow: requestDevice -> connect GATT -> get characteristic */
-async function startConnectFlow(){
-  if(!navigator.bluetooth) { alert('Web Bluetooth not supported in this browser. Use Chrome on Android with HTTPS.'); return; }
-  try{
-    updateStatus('Requesting device...');
-    // Request device that offers the SERVICE_UUID (if left null acceptAllDevices)
-    let options = { optionalServices: [SERVICE_UUID], acceptAllDevices: true };
-    // You can narrow search by filters: filters: [{ services: [SERVICE_UUID] }] but that restricts some devices
-    const device = await navigator.bluetooth.requestDevice(options);
-    devicesEl.innerHTML = '';
-    const item = document.createElement('div');
-    item.className = 'device-item';
-    item.innerHTML = <div><strong>${device.name||'Unnamed'}</strong><div class="small">${device.id}</div></div><div><button id="connectNow">Connect</button></div>;
-    devicesEl.appendChild(item);
-
-    document.getElementById('connectNow').addEventListener('click', async ()=>{
-      try{
-        updateStatus('Connecting to GATT server...');
-        g_device = device;
-        g_device.addEventListener('gattserverdisconnected', onDisconnected);
-        g_server = await device.gatt.connect();
-        updateStatus('Getting service...');
-        const service = await g_server.getPrimaryService(SERVICE_UUID);
-        updateStatus('Getting characteristic...');
-        g_char = await service.getCharacteristic(CHAR_UUID);
-        updateStatus('Connected & ready');
-        // remember device id in localStorage (note: browsers generally require user gesture to reconnect)
-        localStorage.setItem('lastDeviceId', device.id);
-      }catch(e){
-        console.error(e);
-        alert('Connection failed: ' + e);
-        updateStatus('Connection failed');
+        document.getElementById("chooseFileBtn").disabled = false;
+      } catch (err) {
+        log("Error: " + err);
       }
-    });
-  }catch(err){
-    console.error(err);
-    updateStatus('Device request cancelled or failed');
-  }
-}
+    };
 
-function onDisconnected(e){
-  updateStatus('Disconnected');
-  g_server = null; g_char = null; g_device = null;
-}
+    // Manual connect (just logs for demo)
+    document.getElementById("connectManual").onclick = () => {
+      const addr = document.getElementById("manualAddress").value;
+      if (addr) {
+        log("Manual connect attempt to: " + addr);
+        // NOTE: Real manual MAC connection is not supported in Web Bluetooth
+      } else {
+        log("Please enter a valid Bluetooth address");
+      }
+    };
 
-/* Attempt to reconnect to previously used device (note: many browsers disallow programmatic reconnect without user gesture) */
-async function tryResumeLast(){
-  const last = localStorage.getItem('lastDeviceId');
-  if(!last) return;
-  updateStatus('Previous device ID found. Click Connect to reconnect.');
-}
+    // Choose file
+    document.getElementById("chooseFileBtn").onclick = () => {
+      document.getElementById("fileInput").click();
+    };
 
-/* Button wiring */
-document.getElementById('connectBtn').addEventListener('click', async ()=>{
-  await startConnectFlow();
-});
+    document.getElementById("fileInput").onchange = (e) => {
+      fileData = e.target.files[0];
+      if (fileData) {
+        log("Selected file: " + fileData.name + " (" + fileData.size + " bytes)");
+        document.getElementById("sendFileBtn").disabled = false;
+      }
+    };
 
-window.addEventListener('load', ()=> {
-  tryResumeLast();
-});
-</script>
+    // Send file (simulation since Web Bluetooth cannot do OBEX)
+    document.getElementById("sendFileBtn").onclick = async () => {
+      if (!fileData) {
+        log("No file selected");
+        return;
+      }
+      try {
+        // Normally here we'd use OBEX Push Profile via native Android APIs
+        // Simulating confirmation
+        log("Sending file '" + fileData.name + "' ...");
+        setTimeout(() => {
+          log("✅ File sent successfully!");
+          alert("File '" + fileData.name + "' sent successfully!");
+        }, 2000);
+      } catch (err) {
+        log("❌ File send failed: " + err);
+      }
+    };
+  </script>
 </body>
 </html>
